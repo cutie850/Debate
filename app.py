@@ -1,425 +1,145 @@
-import gradio as gr
-import requests
-import random
 import json
-from typing import List, Dict, Any, Optional, Tuple
+import time
+from datetime import datetime
 
-# Default Ollama URL
-DEFAULT_OLLAMA_URL = 'http://localhost:11434'
+# --- Configuration ---
+API_ENDPOINT = "YOUR_AI_API_ENDPOINT"  # e.g., "https://api.openai.com/v1/chat/completions"
+API_KEY = "YOUR_API_KEY"
+HEADERS = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
 
-def check_ollama_connection(ollama_url: str) -> bool:
+# --- Utility Functions ---
+
+def call_ai_api(prompt, topic):
     """
-    Checks if the Ollama server is reachable by sending a GET request to the /api/tags endpoint.
-    Returns True if the server is reachable, False otherwise.
+    Sends a request to the AI API to get a response.
     """
+    messages = [
+        {"role": "system", "content": f"You are an AI opponent in a debate about '{topic}'. Your goal is to provide well-reasoned, concise counter-arguments. Your tone should be persuasive and intelligent."},
+        {"role": "user", "content": prompt}
+    ]
+    data = {
+        "model": "gpt-4o",  # or another suitable model
+        "messages": messages
+    }
+    
     try:
-        response = requests.get(f'{ollama_url}/api/tags', timeout=5)
-        response.raise_for_status()
-        return True
-    except requests.RequestException as e:
-        print(f"Error connecting to Ollama server: {e}")
-        return False
+        response = requests.post(API_ENDPOINT, headers=HEADERS, data=json.dumps(data))
+        response.raise_for_status()  # This will raise an HTTPError if the response was an error
+        return response.json()['choices'][0]['message']['content'].strip()
+    except requests.exceptions.RequestException as e:
+        return f"Error communicating with AI: {e}"
 
-def get_ollama_models(ollama_url: str) -> List[str]:
+def generate_summary(debate_history, topic):
     """
-    Retrieves a list of available models from the Ollama server.
-    Returns a list of model names.
+    Generates a debate summary by sending the full conversation to the AI.
     """
+    summary_prompt = (
+        f"The following is a transcript of a debate about '{topic}'. Please provide a comprehensive analysis:\n\n"
+        f"Debate Transcript:\n{debate_history}\n\n"
+        f"Provide a structured JSON response with the following keys:\n"
+        f"1. 'winner': The winner of the debate ('human' or 'ai').\n"
+        f"2. 'winnerReason': A concise explanation of why they won.\n"
+        f"3. 'humanScore': A score from 0-100 for the human's performance.\n"
+        f"4. 'aiScore': A score from 0-100 for the AI's performance.\n"
+        f"5. 'summary': A brief, overall summary of the debate.\n"
+        f"6. 'humanStrengths': A list of key strengths of the human's arguments.\n"
+        f"7. 'aiStrengths': A list of key strengths of the AI's arguments.\n"
+        f"8. 'keyPoints': A list of the most important points made by both sides.\n"
+        f"9. 'improvementSuggestions': An object with two lists, 'human' and 'ai', for improvement suggestions."
+    )
+    
+    response_text = call_ai_api(summary_prompt, topic)
     try:
-        response = requests.get(f'{ollama_url}/api/tags', timeout=5)
-        response.raise_for_status()
-        models = [model['name'] for model in response.json()['models']]
-        return models
-    except requests.RequestException as e:
-        print(f"Error fetching models from Ollama server: {e}")
-        return []
+        # The AI should return a JSON string, so we parse it
+        summary_data = json.loads(response_text)
+        return summary_data
+    except json.JSONDecodeError:
+        return {"error": "Failed to parse AI summary."}
 
-def generate_output(ollama_url: str, model: str, prompt: str, options: Dict[str, Any]) -> Optional[requests.Response]:
+
+def format_debate_history(messages):
     """
-    Generates a response from the Ollama API based on the given prompt and options.
-    Returns a requests.Response object if successful, None otherwise.
+    Formats the message list into a clean, readable string.
     """
-    try:
-        data = {
-            'model': model,
-            'prompt': prompt,
-            'options': options
-        }
-        response = requests.post(f'{ollama_url}/api/generate',
-                                 json=data,
-                                 stream=True,
-                                 timeout=300)
-        response.raise_for_status()
-        return response
-    except requests.RequestException as e:
-        print(f"Error calling Ollama API: {e}")
-        return None
+    history_str = ""
+    for msg in messages:
+        sender = "Human" if msg['sender'] == 'human' else "AI Opponent"
+        history_str += f"{sender}: {msg['content']}\n\n"
+    return history_str
 
-def main():
-    # Create the Gradio Blocks app
-    with gr.Blocks() as demo:
-        # Fetch initial models from Ollama server
-        initial_models: List[str] = get_ollama_models(DEFAULT_OLLAMA_URL)
+# --- Main Debate Logic ---
 
-        # Top bar with topic input, stage rules, control buttons, and debate state
-        # First row: Topic, Stage Rules, and Status
-        with gr.Row():
-            topic = gr.Textbox(
-                label="🌍 Topic of Debate",
-                placeholder="Enter the topic of the debate",
-                value="Climate change",  # Pre-filled with the topic
-                scale=1
-            )
-            stage_rules = gr.Textbox(
-                label="📏 Stage Rules",
-                placeholder="Enter the stage rules",
-                value="Stay on topic and keep your responses short.",
-                scale=2
-            )
-            # Ollama URL input
-            ollama_url = gr.Textbox(
-                label="🌐 Ollama Server URL",
-                value=DEFAULT_OLLAMA_URL,
-                interactive=True,
-                scale=1
-            )
-            status = gr.Textbox(
-                label="🏁 Debate Status",
-                interactive=False,
-                scale=1
-            )
+def run_debate():
+    """
+    Simulates the debate loop.
+    """
+    print("Welcome to the Debate App!")
+    topic = input("Enter a debate topic (e.g., 'Universal Basic Income'): ")
+    duration_minutes = 60  # Simulating a 60-minute debate
 
-        # Second row: Control buttons
-        with gr.Row():
-            start_button = gr.Button("▶️ Start", scale=1)
-            stop_button = gr.Button("⏹️ Stop", interactive=False, scale=1)  # Initially disabled
-            reset_button = gr.Button("🔄 Reset", scale=1)
+    messages = []
+    start_time = time.time()
+    
+    # AI starts the debate
+    initial_ai_response = call_ai_api("Begin the debate by making an opening statement for the topic.", topic)
+    messages.append({"sender": "ai", "content": initial_ai_response})
+    print(f"\nAI Opponent (Opening Statement): {initial_ai_response}\n")
 
-        # Main content area
-        with gr.Row():
-            # Left sidebar for Agent 1 configuration
-            with gr.Column(scale=1):
-                gr.Markdown("### 🤖 Agent 1 Configuration")
-                agent1_name = gr.Textbox(
-                    label="👤 Agent Name",
-                    value="Climate Scientist"
-                )
-                agent1_system_prompt = gr.TextArea(
-                    label="💬 System Prompt",
-                    lines=5,
-                    placeholder="Define the role or ideas of Agent 1",
-                    value="You are a knowledgeable climate scientist advocating for immediate action to combat climate change."
-                )
-                agent1_model = gr.Dropdown(
-                    label="🧠 Ollama Model",
-                    choices=initial_models,
-                    value=initial_models[0] if initial_models else "",
-                    interactive=True
-                )
-                agent1_temperature = gr.Slider(
-                    label="🌡️ Temperature",
-                    minimum=0.0,
-                    maximum=2.0,
-                    value=1.0
-                )
-                agent1_top_k = gr.Slider(
-                    label="🔝 Top K",
-                    minimum=1,
-                    maximum=200,
-                    value=40
-                )
-                agent1_memory_size = gr.Slider(
-                    label="🧠 Memory Size (characters)",
-                    minimum=100,
-                    maximum=10000,
-                    value=2000
-                )
+    while True:
+        elapsed_time = time.time() - start_time
+        time_remaining = duration_minutes * 60 - elapsed_time
+        
+        if time_remaining <= 0:
+            print("\nTime's up! The debate has ended.")
+            break
+            
+        print(f"Time Remaining: {int(time_remaining)} seconds")
+        user_input = input("Your turn: ")
+        
+        if user_input.lower() in ['exit', 'stop', 'quit']:
+            print("Debate ended by user.")
+            break
 
-            # Chat area (extended to the bottom)
-            with gr.Column(scale=2):
-                chat = gr.Chatbot(
-                    label="🗨️ Debate Chat",
-                    type='messages',
-                    height=600  # Adjust this value to extend the chat area
-                )
+        # Human's turn
+        messages.append({"sender": "human", "content": user_input})
+        
+        # AI's turn
+        ai_prompt = f"The debate so far:\n{format_debate_history(messages)}\n\nYour turn to respond to the last point made by the human."
+        ai_response = call_ai_api(ai_prompt, topic)
+        messages.append({"sender": "ai", "content": ai_response})
+        print(f"\nAI Opponent: {ai_response}\n")
+    
+    # --- Debate Summary ---
+    print("\n--- Generating Debate Summary ---")
+    full_debate_text = format_debate_history(messages)
+    summary = generate_summary(full_debate_text, topic)
+    
+    if "error" in summary:
+        print(summary["error"])
+    else:
+        print("\n--- FINAL ANALYSIS ---")
+        print(f"Winner: {'You' if summary['winner'] == 'human' else 'The AI Opponent'}")
+        print(f"Reason: {summary['winnerReason']}")
+        print(f"\nYour Score: {summary['humanScore']}%")
+        print(f"AI Score: {summary['aiScore']}%")
+        print(f"\nOverall Summary:\n{summary['summary']}")
+        
+        print("\nYour Strengths:")
+        for s in summary['humanStrengths']:
+            print(f"- {s}")
+            
+        print("\nAI Strengths:")
+        for s in summary['aiStrengths']:
+            print(f"- {s}")
+            
+        print("\nImprovement Suggestions for You:")
+        if 'human' in summary['improvementSuggestions']:
+            for s in summary['improvementSuggestions']['human']:
+                print(f"- {s}")
 
-            # Right sidebar for Agent 2 configuration
-            with gr.Column(scale=1):
-                gr.Markdown("### 🤖 Agent 2 Configuration")
-                agent2_name = gr.Textbox(
-                    label="👤 Agent Name",
-                    value="Conservative Farmer"
-                )
-                agent2_system_prompt = gr.TextArea(
-                    label="💬 System Prompt",
-                    lines=5,
-                    placeholder="Define the role or ideas of Agent 2",
-                    value="You are a conservative farmer skeptical about the impact of human activities on climate change."
-                )
-                agent2_model = gr.Dropdown(
-                    label="🧠 Ollama Model",
-                    choices=initial_models,
-                    value=initial_models[0] if initial_models else "",
-                    interactive=True
-                )
-                agent2_temperature = gr.Slider(
-                    label="🌡️ Temperature",
-                    minimum=0.0,
-                    maximum=2.0,
-                    value=1.0
-                )
-                agent2_top_k = gr.Slider(
-                    label="🔝 Top K",
-                    minimum=1,
-                    maximum=200,
-                    value=40
-                )
-                agent2_memory_size = gr.Slider(
-                    label="🧠 Memory Size (characters)",
-                    minimum=100,
-                    maximum=10000,
-                    value=2000
-                )
-
-        # State variable to control debate running status and store conversation
-        debate_state = gr.State({'running': False, 'conversation': [], 'chat_history': [], 'message_count': 0, 'current_agent_index': None})
-
-        def update_models(ollama_url: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-            """
-            Updates the model dropdowns with models from the Ollama server.
-            Returns updates for both agent1_model and agent2_model dropdowns.
-            """
-            models = get_ollama_models(ollama_url)
-            if models:
-                first_model = models[0]
-            else:
-                first_model = ""
-            return (
-                gr.Dropdown.update(choices=models, value=first_model),
-                gr.Dropdown.update(choices=models, value=first_model)
-            )
-
-        # Update models when Ollama URL changes
-        ollama_url.change(
-            update_models,
-            inputs=[ollama_url],
-            outputs=[agent1_model, agent2_model]
-        )
-
-        def start_debate(
-            topic_text: str,
-            stage_rules_text: str,
-            agent1_name_text: str, agent1_system_prompt_text: str, agent1_model_name: str, agent1_temperature_value: float, agent1_top_k_value: int, agent1_memory_size_value: int,
-            agent2_name_text: str, agent2_system_prompt_text: str, agent2_model_name: str, agent2_temperature_value: float, agent2_top_k_value: int, agent2_memory_size_value: int,
-            ollama_url_input: str,
-            debate_state: Dict[str, Any]
-        ) -> Any:
-            """
-            Runs the debate between the two agents.
-            """
-            if debate_state['running']:
-                # Debate is already running
-                yield gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
-                return
-
-            if not check_ollama_connection(ollama_url_input):
-                yield debate_state['chat_history'], "Cannot connect to Ollama server. Please check the URL and ensure the server is running.", gr.update(interactive=True), gr.update(interactive=False)
-                return
-
-            # Initialize agents with their configurations
-            agents = [
-                {
-                    'name': agent1_name_text.strip() or "Agent 1",
-                    'system_prompt': agent1_system_prompt_text.strip(),
-                    'model': agent1_model_name,
-                    'temperature': agent1_temperature_value,
-                    'top_k': int(agent1_top_k_value),
-                    'memory_size': int(agent1_memory_size_value),
-                    'memory': ''
-                },
-                {
-                    'name': agent2_name_text.strip() or "Agent 2",
-                    'system_prompt': agent2_system_prompt_text.strip(),
-                    'model': agent2_model_name,
-                    'temperature': agent2_temperature_value,
-                    'top_k': int(agent2_top_k_value),
-                    'memory_size': int(agent2_memory_size_value),
-                    'memory': ''
-                }
-            ]
-
-            # Get conversation history and control variables from debate_state
-            conversation: List[Dict[str, Any]] = debate_state['conversation']
-            chat_history: List[Dict[str, str]] = debate_state['chat_history']
-            message_count: int = debate_state.get('message_count', 0)
-            current_agent_index: Optional[int] = debate_state.get('current_agent_index')
-
-            if current_agent_index is None:
-                # If starting for the first time, pick a random agent
-                current_agent_index = random.randint(0, 1)
-                debate_state['current_agent_index'] = current_agent_index
-
-            status_text: str = "🚀 Debate started."
-            debate_state['running'] = True
-
-            # Disable the start button and enable the stop button
-            yield chat_history, status_text, gr.update(interactive=False), gr.update(interactive=True)
-
-            while message_count < 1000 and debate_state['running']:
-                agent = agents[current_agent_index]
-
-                # Prepare the memory from the conversation, limited by memory_size
-                memory_text = ''
-                memory_length = 0
-                for msg in reversed(conversation):
-                    msg_text = f"{msg['name']}: {msg['content']}\n"
-                    memory_length += len(msg_text)
-                    if memory_length > agent['memory_size']:
-                        break
-                    memory_text = msg_text + memory_text
-
-                # Prepare the prompt for the agent
-                prompt = (
-                    f"{agent['system_prompt']}\n\n"
-                    f"{stage_rules_text.strip()}\n\n"
-                    f"Topic: {topic_text.strip()}\n\n"
-                    f"{memory_text}"
-                    f"{agent['name']}:"
-                )
-
-                # Options for the model generation
-                options = {
-                    'temperature': agent['temperature'],
-                    'top_k': agent['top_k'],
-                    'stop': [f"{agents[1 - current_agent_index]['name']}:"]  # Stop when the other agent's name appears
-                }
-
-                # Generate response from the model
-                response = generate_output(ollama_url_input, agent['model'], prompt, options)
-
-                if response:
-                    full_response = ''
-                    role = 'user' if current_agent_index == 0 else 'assistant'
-                    # Add a new message with empty content
-                    chat_history.append({'role': role, 'content': f"{agent['name']}: "})
-                    conversation.append({
-                        'name': agent['name'],
-                        'content': ''
-                    })
-                    message_count += 1
-
-                    # Stream the response and update the chat in real-time
-                    for line in response.iter_lines():
-                        if not debate_state['running']:
-                            break
-                        if line:
-                            json_response = json.loads(line.decode('utf-8'))
-                            if 'response' in json_response:
-                                partial_response = json_response['response']
-                                full_response += partial_response
-
-                                # Update the last message in chat history
-                                chat_history[-1]['content'] = f"{agent['name']}: {full_response}"
-                                conversation[-1]['content'] = full_response
-
-                                # Update status
-                                status_text = f"{agent['name']} is typing..."
-
-                                # Yield the updated conversation and status
-                                yield chat_history, status_text, gr.update(interactive=False), gr.update(interactive=True)
-                    full_response = full_response.strip()
-                else:
-                    full_response = "Error generating response."
-                    # Update the last message in chat history
-                    chat_history[-1]['content'] = f"{agent['name']}: {full_response}"
-                    conversation[-1]['content'] = full_response
-
-                    # Update status
-                    status_text = f"{agent['name']} encountered an error."
-
-                    # Yield the updated conversation and status
-                    yield chat_history, status_text, gr.update(interactive=False), gr.update(interactive=True)
-
-                # Check if debate has been stopped
-                if not debate_state['running']:
-                    status_text = "🛑 Debate stopped."
-                    debate_state['current_agent_index'] = current_agent_index
-                    debate_state['message_count'] = message_count
-                    yield chat_history, status_text, gr.update(interactive=True), gr.update(interactive=False)
-                    break
-
-                # Update status after agent finishes typing
-                status_text = f"{agent['name']} finished responding."
-
-                # Yield the final update for this turn
-                yield chat_history, status_text, gr.update(interactive=False), gr.update(interactive=True)
-
-                # Switch to the other agent
-                current_agent_index = 1 - current_agent_index
-
-                # Update debate_state with the new current_agent_index and message_count
-                debate_state['current_agent_index'] = current_agent_index
-                debate_state['message_count'] = message_count
-
-            if message_count >= 1000:
-                status_text = "Debate ended after reaching message limit."
-                debate_state['running'] = False
-                yield chat_history, status_text, gr.update(interactive=True), gr.update(interactive=False)
-
-            # Re-enable the start button and disable the stop button
-            debate_state['running'] = False
-            debate_state['current_agent_index'] = current_agent_index
-            debate_state['message_count'] = message_count
-            yield chat_history, status_text, gr.update(interactive=True), gr.update(interactive=False)
-
-        def stop_debate(debate_state: Dict[str, Any]) -> Tuple[Any, str, Dict[str, Any], Dict[str, Any]]:
-            """
-            Stops the ongoing debate by setting the running state to False.
-            """
-            debate_state['running'] = False
-            return gr.update(), "🛑 Debate stopped.", gr.update(interactive=True), gr.update(interactive=False)
-
-        def reset_debate(debate_state: Dict[str, Any]) -> Tuple[List[Any], str, Dict[str, Any], Dict[str, Any]]:
-            """
-            Resets the debate by clearing the chat history and resetting the running state.
-            """
-            debate_state['running'] = False
-            debate_state['conversation'] = []
-            debate_state['chat_history'] = []
-            debate_state['message_count'] = 0
-            debate_state['current_agent_index'] = None
-            return [], "🔄 Debate reset.", gr.update(interactive=True), gr.update(interactive=False)
-
-        # Button event handlers
-        start_button.click(
-            start_debate,
-            inputs=[
-                topic,
-                stage_rules,
-                agent1_name, agent1_system_prompt, agent1_model, agent1_temperature, agent1_top_k, agent1_memory_size,
-                agent2_name, agent2_system_prompt, agent2_model, agent2_temperature, agent2_top_k, agent2_memory_size,
-                ollama_url,
-                debate_state
-            ],
-            outputs=[
-                chat, status, start_button, stop_button
-            ],
-            queue=True
-        )
-
-        stop_button.click(
-            stop_debate,
-            inputs=[debate_state],
-            outputs=[chat, status, start_button, stop_button]
-        )
-
-        reset_button.click(
-            reset_debate,
-            inputs=[debate_state],
-            outputs=[chat, status, start_button, stop_button]
-        )
-
-    if __name__ == "__main__":
-        demo.queue().launch()
-
-main()
+if __name__ == "__main__":
+    import requests
+    run_debate()
